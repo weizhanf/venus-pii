@@ -48,3 +48,4 @@ Thumbs.db
 # Distribution
 *.tar.gz
 *.whl
+dist/
