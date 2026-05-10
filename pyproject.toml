@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "venus-pii"
+version = "0.1.0"
+description = "Give AI a blindfold before it sees your data. HMAC-SHA256 PII sanitization for DataFrames."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Venus Protocol" }]
+keywords = ["pii", "privacy", "llm", "ai", "hmac", "data-protection", "gdpr", "anonymization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["polars>=0.20"]
+
+[project.urls]
+Homepage = "https://github.com/weizhanf/venus-pii"
+Repository = "https://github.com/weizhanf/venus-pii"
+Issues = "https://github.com/weizhanf/venus-pii/issues"
