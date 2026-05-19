@@ -11,6 +11,11 @@ from venus_pii.guard import (
     PIIColumnReport,
     PIIGuardResult,
 )
+from venus_pii.trace import (
+    TraceRecorder,
+    traced_sanitize,
+    traced_restore,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -21,4 +26,7 @@ __all__ = [
     "PIILevel",
     "PIIColumnReport",
     "PIIGuardResult",
+    "TraceRecorder",
+    "traced_sanitize",
+    "traced_restore",
 ]
