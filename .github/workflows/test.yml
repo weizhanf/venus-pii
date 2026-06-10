@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A branch with an open PR fires both push and pull_request for the same commit;
+# cancel superseded runs so we don't test the same SHA twice.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: pytest (Python ${{ matrix.python-version }})
