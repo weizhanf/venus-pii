@@ -136,4 +136,14 @@ venus-pii 是一个**定位极其清晰、卖点极强**的小而美的库：在
 6. **【P2】收窄过宽的列名正则 + 扩值检测**（美/欧手机、通用证件）— 降误报、补漏检。
 7. **【P1】修 salary 还原语义**。
 
+### 关于 PR #1（trace 模块）的归属 — 已定：留库 + 惰性导入
+
+trace 模块**留在 venus-pii 内**（与"白盒可审计"哲学契合），但**不在 `__init__.py` 顶层 eager-import**。本分支的 `venus_pii/__init__.py` 已改为 PEP 562 惰性导入：
+
+- `import venus_pii` 只加载核心 `guard`，**不会**连带拉入 `trace`（及其 `subprocess`/`inspect` 依赖）——核心保持轻量。
+- 首次访问 `TraceRecorder` / `traced_sanitize` / `traced_restore`（或直接 `import venus_pii.trace`）时才按需加载 trace。
+- `from venus_pii import TraceRecorder` 与 `venus_pii.TraceRecorder` 均可用；`dir(venus_pii)` 也能发现这些名字。
+
+该 `__init__.py` 写法**无论 trace.py 是否存在都能安全顶层导入**，因此可直接替换 PR #1 中现有的 eager-import 版本。实测：本分支（无 trace.py）核心导入正常、17 tests 全绿；临时放入 trace.py 后惰性解析正确、trace 不被提前加载。
+
 **这份报告本身是这条 `claude/project-analysis-report-cw4zf5` 分支的交付物。** 上面 1–7 的代码改动我没有在这条分支上动——它们跨越核心库逻辑与 PR 治理，属于需要你拍板的范围。告诉我做哪几条，我就开干（建议从 1+2+4 这组"低风险高收益"开始）。
