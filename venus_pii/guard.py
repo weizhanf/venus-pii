@@ -81,29 +81,46 @@ COLUMN_NAME_PATTERNS: dict[PIICategory, list[re.Pattern]] = {
         re.compile(r"姓名|名字|name|fullname|full_name|student_name|员工姓名|教师姓名|first.?name|last.?name", re.I),
     ],
     PIICategory.PHONE: [
-        re.compile(r"电话|手机|phone|mobile|tel|联系方式|cell", re.I),
+        # \b on tel/cell stops "hotel"/"excellent" false positives; "telephone"
+        # is still caught by the "phone" alternative.
+        re.compile(r"电话|手机|phone|mobile|\btel\b|联系方式|\bcell\b", re.I),
     ],
     PIICategory.ID_CARD: [
-        re.compile(r"身份证|idcard|id_card|证件号|sfz|ssn|social.?security", re.I),
+        re.compile(r"身份证|idcard|id_card|证件号|sfz|\bssn\b|social.?security", re.I),
     ],
     PIICategory.EMAIL: [
         re.compile(r"邮箱|email|e-mail|电子邮件", re.I),
     ],
     PIICategory.ADDRESS: [
-        re.compile(r"地址|住址|address|addr|家庭住址|street|city|zip", re.I),
+        # \bcity\b / \bzip\b stop "velocity"/"zipper"; zip.?code keeps the real
+        # postal-code variants, and postal is added recall.
+        re.compile(r"地址|住址|address|addr|家庭住址|street|\bcity\b|\bzip\b|zip.?code|postal", re.I),
     ],
     PIICategory.SALARY: [
         re.compile(r"工资|薪资|salary|wage|薪酬|月薪|年薪|收入|income|compensation", re.I),
     ],
     PIICategory.BANK_ACCOUNT: [
-        re.compile(r"银行|卡号|bank|account|账号|routing", re.I),
+        # \bbank\b stops "embankment"; "bank_account" still matched via "account".
+        re.compile(r"银行|卡号|\bbank\b|account|账号|routing", re.I),
     ],
 }
 
-VALUE_PATTERNS: dict[PIICategory, re.Pattern] = {
-    PIICategory.ID_CARD: re.compile(r"^\d{17}[\dXx]$"),
-    PIICategory.PHONE: re.compile(r"^1[3-9]\d{9}$"),
-    PIICategory.EMAIL: re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+# Multiple value patterns per category — a value is a match if ANY pattern hits.
+# Value patterns must be specific enough not to fire on plain integers (scores,
+# counts): bare digit runs are deliberately NOT treated as phones.
+VALUE_PATTERNS: dict[PIICategory, list[re.Pattern]] = {
+    PIICategory.ID_CARD: [
+        re.compile(r"^\d{17}[\dXx]$"),       # China resident ID (18 digits)
+        re.compile(r"^\d{3}-\d{2}-\d{4}$"),  # US SSN
+    ],
+    PIICategory.PHONE: [
+        re.compile(r"^1[3-9]\d{9}$"),                       # China mobile
+        re.compile(r"^\+\d{8,15}$"),                        # E.164 (requires +)
+        re.compile(r"^\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}$"),  # US/NANP w/ separators
+    ],
+    PIICategory.EMAIL: [
+        re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+    ],
 }
 
 CATEGORY_LEVEL: dict[PIICategory, PIILevel] = {
@@ -176,8 +193,8 @@ def _detect_by_values(series: pl.Series) -> PIICategory:
     if len(non_null) == 0:
         return PIICategory.NONE
     sample = non_null.head(min(20, len(non_null))).to_list()
-    for category, pattern in VALUE_PATTERNS.items():
-        matches = sum(1 for v in sample if pattern.match(str(v)))
+    for category, patterns in VALUE_PATTERNS.items():
+        matches = sum(1 for v in sample if any(p.match(str(v)) for p in patterns))
         if matches / len(sample) > 0.5:
             return category
     return PIICategory.NONE

@@ -123,3 +123,43 @@ def test_salary_band_restores_to_range():
     result = sanitize(df, key="k")
     restored = restore(result.sanitized_df, result.token_maps)["月薪"].to_list()
     assert restored == ["[-inf, 5000)", "[5000, 10000)", "[50000, +inf)"]
+
+
+# ---- P2: detection precision ----
+
+@pytest.mark.parametrize("colname", ["velocity", "excellent", "hotel_id", "embankment", "zipper"])
+def test_substring_false_positives_pass(colname):
+    """Columns that merely contain a PII token as a substring must NOT be flagged."""
+    df = pl.DataFrame({colname: [1, 2, 3]})
+    assert detect(df)[0].category == PIICategory.NONE
+
+
+@pytest.mark.parametrize("colname", ["city", "zip", "zip_code", "postal_code", "ssn", "cell"])
+def test_real_tokens_still_detected(colname):
+    """Narrowing must not lose genuine standalone/variant PII column names."""
+    df = pl.DataFrame({colname: ["x", "y"]})
+    assert detect(df)[0].category != PIICategory.NONE
+
+
+def test_value_based_us_ssn_blocks():
+    """US SSN values are detected and BLOCKed even when the column name is opaque."""
+    df = pl.DataFrame({"national_no": ["123-45-6789", "987-65-4321"]})
+    r = detect(df)[0]
+    assert r.category == PIICategory.ID_CARD
+    assert r.level == PIILevel.BLOCK
+
+
+@pytest.mark.parametrize("values", [
+    ["415-555-1234", "212-555-9876"],   # US dashed
+    ["(415) 555-1234", "(212) 555-9876"],  # US parens
+    ["+442071838750", "+13105551234"],   # E.164
+])
+def test_value_based_international_phone(values):
+    df = pl.DataFrame({"contact_info": values})
+    assert detect(df)[0].category == PIICategory.PHONE
+
+
+def test_plain_integers_not_phone():
+    """Bare numbers (scores/counts/quantities) must never be treated as phones."""
+    df = pl.DataFrame({"order_qty": [12345678, 87654321]})
+    assert detect(df)[0].category == PIICategory.NONE

@@ -146,4 +146,15 @@ trace 模块**留在 venus-pii 内**（与"白盒可审计"哲学契合），但
 
 该 `__init__.py` 写法**无论 trace.py 是否存在都能安全顶层导入**，因此可直接替换 PR #1 中现有的 eager-import 版本。实测：本分支（无 trace.py）核心导入正常、17 tests 全绿；临时放入 trace.py 后惰性解析正确、trace 不被提前加载。
 
+### P2 检测精度 — 已实现
+
+- **收窄子串误报**：`\btel\b`/`\bcell\b`（不再命中 "hotel"/"excellent"）、`\bcity\b`/`\bzip\b`（不再命中 "velocity"/"zipper"）、`\bbank\b`（不再命中 "embankment"）、`\bssn\b`。真 PII 列仍通过 sibling token 命中（如 "telephone"→phone、"bank_account"→account）。
+- **补召回**：地址新增 `zip.?code`/`postal`。
+- **国际格式值检测**：`VALUE_PATTERNS` 改为每类多模式（list）；新增 美国 SSN（→BLOCK）、E.164（需 `+`）、美式分隔电话；刻意不让裸数字（成绩/计数）被误判为电话。
+- 测试 17 → **33 全绿**。
+
+### ⚠️ 关键集成冲突：本分支的 P1 与 Devin PR #1 不可独立合并
+
+`tests/test_reidentification.py:319` 硬编码断言 `^PERSON_[0-9a-f]{8}$`——即把**旧的 8 字符 / 32-bit 截断**写死为"正确"。而本分支 P1 把令牌提到 16 字符 / 64-bit 以消除碰撞。两者同时合并会让该断言（及 `test_token_regex_format`、`test_token_length_constant`）失败。**合并 PR #1 前必须把这些断言改成 16 字符**，否则 CI 会红。换句话说：Devin 的"合规"测试把我标为 P1 的截断弱点固化成了规范。
+
 **这份报告本身是这条 `claude/project-analysis-report-cw4zf5` 分支的交付物。** 上面 1–7 的代码改动我没有在这条分支上动——它们跨越核心库逻辑与 PR 治理，属于需要你拍板的范围。告诉我做哪几条，我就开干（建议从 1+2+4 这组"低风险高收益"开始）。
