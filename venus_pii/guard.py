@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import os
 import re
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -124,7 +125,38 @@ TOKEN_PREFIX: dict[PIICategory, str] = {
     PIICategory.SALARY: "SALARY_BAND",
 }
 
+_PUBLIC_DEFAULT_KEY = b"venus-pii-default-key"
+# Default truncation: 16 hex chars = 64 bits. At 64 bits the birthday bound for a
+# 50% collision is ~5 billion unique values, vs. ~77k for the old 32-bit (8-char)
+# tokens — collisions there silently corrupted restore() and broke joins.
+_DEFAULT_TOKEN_WIDTH = 16
+
+# Kept for backwards compatibility (tests/tools patch this module constant).
 _DEFAULT_HMAC_KEY = os.environ.get("VENUS_PII_KEY", "venus-pii-default-key").encode("utf-8")
+
+
+def _resolve_key(key: Optional[str | bytes] = None) -> bytes:
+    """Resolve the HMAC key to use, warning loudly if the public default is in play.
+
+    Precedence: explicit ``key`` arg > ``VENUS_PII_KEY`` env var > public default.
+    The public default is a constant shipped in the source, so any token produced
+    with it is reversible by anyone — we never want that to happen silently.
+    """
+    if key is not None:
+        return key.encode("utf-8") if isinstance(key, str) else key
+    env = os.environ.get("VENUS_PII_KEY")
+    if env:
+        return env.encode("utf-8")
+    # Honour a test/tool override of the module constant before warning.
+    if _DEFAULT_HMAC_KEY != _PUBLIC_DEFAULT_KEY:
+        return _DEFAULT_HMAC_KEY
+    warnings.warn(
+        "venus-pii: VENUS_PII_KEY is not set, using the public default key. "
+        "Tokens produced this way are reversible by ANYONE who has this library. "
+        "Set the VENUS_PII_KEY env var or pass key=... to sanitize() for real protection.",
+        stacklevel=3,
+    )
+    return _PUBLIC_DEFAULT_KEY
 
 
 # ============================================================
@@ -171,17 +203,27 @@ def detect_pii_columns(df: pl.DataFrame) -> list[PIIColumnReport]:
 #  Tokenization
 # ============================================================
 
-def _hmac_token(value: str, prefix: str, key: bytes) -> str:
-    digest = hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()[:8]
+def _hmac_token(value: str, prefix: str, key: bytes, width: int = _DEFAULT_TOKEN_WIDTH) -> str:
+    digest = hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()[:width]
     return f"{prefix}_{digest}"
 
 
 def _tokenize_column(
-    series: pl.Series, prefix: str, hmac_key: Optional[bytes] = None,
+    series: pl.Series,
+    prefix: str,
+    hmac_key: Optional[bytes] = None,
+    width: int = _DEFAULT_TOKEN_WIDTH,
 ) -> tuple[pl.Series, dict[str, str]]:
     key = hmac_key or _DEFAULT_HMAC_KEY
     unique_vals = series.drop_nulls().unique().sort().to_list()
-    forward_map = {str(v): _hmac_token(str(v), prefix, key) for v in unique_vals}
+    forward_map = {str(v): _hmac_token(str(v), prefix, key, width) for v in unique_vals}
+    # A truncated-digest collision would make restore() return the wrong original
+    # and silently break joins. Fail loudly instead of corrupting data.
+    if len(set(forward_map.values())) != len(forward_map):
+        raise ValueError(
+            f"venus-pii: HMAC token collision in column tokenization at width={width}. "
+            f"Increase token_width to disambiguate {len(forward_map)} unique values."
+        )
     reverse_map = {token: original for original, token in forward_map.items()}
     tokenized = series.cast(pl.Utf8, strict=False).map_elements(
         lambda v: forward_map.get(str(v), v) if v is not None else None,
@@ -190,25 +232,33 @@ def _tokenize_column(
     return tokenized, reverse_map
 
 
+# (band label, lower_inclusive, upper_exclusive). None means unbounded.
+_SALARY_BANDS = [
+    ("SALARY_BAND_A", None, 5000),
+    ("SALARY_BAND_B", 5000, 10000),
+    ("SALARY_BAND_C", 10000, 20000),
+    ("SALARY_BAND_D", 20000, 50000),
+    ("SALARY_BAND_E", 50000, None),
+]
+
+
 def _salary_band(series: pl.Series) -> tuple[pl.Series, dict[str, str]]:
+    """Bucket salaries into bands. Banding is lossy by design: restore() recovers
+    the band's numeric range string (e.g. "[5000, 10000)"), not the exact value.
+    """
     numeric = series.cast(pl.Float64, strict=False)
     reverse_map: dict[str, str] = {}
     def to_band(v):
         if v is None:
             return None
         val = float(v)
-        if val < 5000:
-            band = "SALARY_BAND_A"
-        elif val < 10000:
-            band = "SALARY_BAND_B"
-        elif val < 20000:
-            band = "SALARY_BAND_C"
-        elif val < 50000:
-            band = "SALARY_BAND_D"
-        else:
-            band = "SALARY_BAND_E"
-        reverse_map[band] = f"{band}(range)"
-        return band
+        for band, lo, hi in _SALARY_BANDS:
+            if (lo is None or val >= lo) and (hi is None or val < hi):
+                lo_s = "-inf" if lo is None else str(int(lo))
+                hi_s = "+inf" if hi is None else str(int(hi))
+                reverse_map[band] = f"[{lo_s}, {hi_s})"
+                return band
+        return None
     banded = numeric.map_elements(to_band, return_dtype=pl.Utf8)
     return banded, reverse_map
 
@@ -220,10 +270,24 @@ def _salary_band(series: pl.Series) -> tuple[pl.Series, dict[str, str]]:
 def sanitize(
     df: pl.DataFrame,
     reports: Optional[list[PIIColumnReport]] = None,
+    *,
+    key: Optional[str | bytes] = None,
+    token_width: int = _DEFAULT_TOKEN_WIDTH,
 ) -> PIIGuardResult:
-    """Sanitize a DataFrame: detect PII and apply BLOCK/MASK/PASS rules."""
+    """Sanitize a DataFrame: detect PII and apply BLOCK/MASK/PASS rules.
+
+    Args:
+        df: The DataFrame to sanitize.
+        reports: Pre-computed column reports; auto-detected if omitted.
+        key: HMAC key for this call. Overrides the VENUS_PII_KEY env var. Pass a
+            distinct key per tenant for multi-tenant isolation. If omitted and no
+            env var is set, a public default key is used (with a warning) — those
+            tokens are reversible by anyone.
+        token_width: Hex chars of HMAC digest to keep (default 16 = 64 bits).
+    """
     if reports is None:
         reports = detect_pii_columns(df)
+    resolved_key = _resolve_key(key)
     sanitized = df.clone()
     blocked_columns: list[str] = []
     token_maps: dict[str, dict[str, str]] = {}
@@ -239,7 +303,9 @@ def sanitize(
             if report.category == PIICategory.SALARY:
                 tokenized, rmap = _salary_band(sanitized[col])
             else:
-                tokenized, rmap = _tokenize_column(sanitized[col], prefix)
+                tokenized, rmap = _tokenize_column(
+                    sanitized[col], prefix, hmac_key=resolved_key, width=token_width,
+                )
             sanitized = sanitized.with_columns(tokenized.alias(col))
             token_maps[col] = rmap
             report.sample_tokens = list(rmap.values())[:5]

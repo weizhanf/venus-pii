@@ -79,12 +79,27 @@ original_df = restore(safe_df, result.token_maps)
 
 ### Custom HMAC key
 
+Pass a key directly (works per-call, ideal for multi-tenant isolation):
+
+```python
+result = sanitize(df, key="tenant-a-secret")
+```
+
+Or set it once for the whole process via env var:
+
 ```bash
 export VENUS_PII_KEY="my-secret-enterprise-key"
 ```
 
-Same name + same key = same token (deterministic across sessions).
+Precedence: `key=` argument → `VENUS_PII_KEY` env var → public default.
+
+Same value + same key = same token (deterministic across sessions).
 Different key = different token (multi-tenant isolation).
+
+> ⚠️ **Set a key.** If neither `key=` nor `VENUS_PII_KEY` is provided, venus-pii
+> falls back to a **public default key that ships in the source** and emits a
+> warning. Tokens produced with it are reversible by anyone who has this library —
+> it exists only so demos run out of the box, never for real data.
 
 ### Detect without masking
 
@@ -129,6 +144,9 @@ for r in reports:
 - **Deterministic**: same input + same key = same token (join tables still work)
 - **Irreversible**: can't recover "张三" from "PERSON_a3f8c21e" without the reverse map
 - **Isolated**: different key = completely different tokens (multi-tenant safe)
+- **Collision-safe**: tokens keep 16 hex chars (64 bits) by default; a truncation
+  collision raises an error rather than silently corrupting `restore()`. Tune with
+  `sanitize(df, token_width=...)`.
 
 The reverse map (`token_maps`) stays on your machine. The LLM never sees it.
 

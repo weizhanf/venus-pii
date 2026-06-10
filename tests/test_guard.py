@@ -82,3 +82,44 @@ def test_null_preserved():
     df = pl.DataFrame({"姓名": ["张三", None, "王五"]})
     result = sanitize(df)
     assert result.sanitized_df["姓名"].null_count() == 1
+
+
+def test_default_key_warns():
+    """Using the public default key must warn — it is reversible by anyone."""
+    df = pl.DataFrame({"姓名": ["张三"]})
+    with pytest.warns(UserWarning, match="VENUS_PII_KEY"):
+        sanitize(df)
+
+
+def test_explicit_key_no_warning():
+    df = pl.DataFrame({"姓名": ["张三"]})
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("error")  # any warning becomes an error
+        sanitize(df, key="my-secret-key")  # must not warn
+
+
+def test_key_isolation():
+    """Different keys must produce different tokens (multi-tenant isolation)."""
+    df = pl.DataFrame({"姓名": ["张三", "李四"]})
+    t1 = sanitize(df, key="tenant-A").sanitized_df["姓名"].to_list()
+    t2 = sanitize(df, key="tenant-B").sanitized_df["姓名"].to_list()
+    assert t1 != t2
+    # Same key is still deterministic.
+    t1b = sanitize(df, key="tenant-A").sanitized_df["姓名"].to_list()
+    assert t1 == t1b
+
+
+def test_token_width_default_64bit():
+    """Default token is PREFIX_ + 16 hex chars (64 bits)."""
+    df = pl.DataFrame({"姓名": ["张三"]})
+    token = sanitize(df, key="k").sanitized_df["姓名"][0]
+    assert token.startswith("PERSON_")
+    assert len(token.split("_", 1)[1]) == 16
+
+
+def test_salary_band_restores_to_range():
+    df = pl.DataFrame({"月薪": [3000, 8000, 60000]})
+    result = sanitize(df, key="k")
+    restored = restore(result.sanitized_df, result.token_maps)["月薪"].to_list()
+    assert restored == ["[-inf, 5000)", "[5000, 10000)", "[50000, +inf)"]
