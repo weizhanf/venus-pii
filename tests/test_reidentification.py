@@ -29,7 +29,7 @@ import polars as pl
 import pytest
 
 from venus_pii import sanitize, restore
-from venus_pii.guard import _hmac_token, _DEFAULT_HMAC_KEY
+from venus_pii.guard import _hmac_token, _DEFAULT_HMAC_KEY, _DEFAULT_TOKEN_WIDTH
 
 
 # ============================================================
@@ -316,7 +316,7 @@ class TestStatisticalIndistinguishability:
         # The tokens themselves reveal nothing about which name is which
         for token in token_counts:
             assert token.startswith("PERSON_"), f"Token missing prefix: {token}"
-            assert re.match(r"^PERSON_[0-9a-f]{8}$", token), (
+            assert re.match(rf"^PERSON_[0-9a-f]{{{_DEFAULT_TOKEN_WIDTH}}}$", token), (
                 f"Token format unexpected: {token}"
             )
 
@@ -354,9 +354,9 @@ class TestTokenFormatSecurity:
             assert token.isascii(), f"Non-ASCII token: {token}"
 
     def test_token_regex_format(self):
-        """All tokens must match PREFIX_[0-9a-f]{8} exactly."""
+        """All tokens must match PREFIX_ + default-width hex exactly."""
         key = _DEFAULT_HMAC_KEY
-        pattern = re.compile(r"^[A-Z_]+_[0-9a-f]{8}$")
+        pattern = re.compile(rf"^[A-Z_]+_[0-9a-f]{{{_DEFAULT_TOKEN_WIDTH}}}$")
 
         for name in CHINESE_NAMES + ENGLISH_NAMES:
             token = _hmac_token(name, "PERSON", key)

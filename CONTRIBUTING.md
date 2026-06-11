@@ -25,8 +25,12 @@ COLUMN_NAME_PATTERNS[PIICategory.MEDICAL_RECORD] = [
 ### 3. (Optional) Add value patterns
 
 ```python
-VALUE_PATTERNS[PIICategory.MEDICAL_RECORD] = re.compile(r"^MRN-\d{8}$")
+VALUE_PATTERNS[PIICategory.MEDICAL_RECORD] = [re.compile(r"^MRN-\d{8}$")]
 ```
+
+`VALUE_PATTERNS` maps a category to a **list** of patterns — a value matches the
+category if it matches *any* pattern in the list. Keep patterns specific enough
+that they don't fire on plain integers (scores, counts, quantities).
 
 ### 4. Set the protection level
 

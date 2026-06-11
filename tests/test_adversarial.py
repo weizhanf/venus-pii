@@ -23,7 +23,13 @@ import polars as pl
 import pytest
 
 from venus_pii import detect, sanitize, restore
-from venus_pii.guard import PIICategory, PIILevel, _hmac_token, _DEFAULT_HMAC_KEY
+from venus_pii.guard import (
+    PIICategory,
+    PIILevel,
+    _hmac_token,
+    _DEFAULT_HMAC_KEY,
+    _DEFAULT_TOKEN_WIDTH,
+)
 
 
 # ============================================================
@@ -225,7 +231,7 @@ class TestEdgeCases:
 
         token = result.sanitized_df["姓名"][0]
         assert token.startswith("PERSON_")
-        assert len(token) == len("PERSON_") + 8  # Fixed length regardless of input
+        assert len(token) == len("PERSON_") + _DEFAULT_TOKEN_WIDTH  # Fixed length regardless of input
 
     def test_special_characters_in_values(self):
         """Values with special characters should be handled."""
@@ -344,7 +350,7 @@ class TestHMACAttacks:
         key = _DEFAULT_HMAC_KEY
         token = _hmac_token("", "PERSON", key)
         assert token.startswith("PERSON_")
-        assert len(token) == len("PERSON_") + 8
+        assert len(token) == len("PERSON_") + _DEFAULT_TOKEN_WIDTH
 
     def test_timing_consistent(self):
         """Token generation should take roughly constant time

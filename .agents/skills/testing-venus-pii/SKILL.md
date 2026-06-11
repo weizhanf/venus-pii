@@ -8,7 +8,7 @@ description: Test the venus-pii PII protection library end-to-end. Use when veri
 ## Environment Setup
 
 ```bash
-cd /home/ubuntu/venus-pii
+cd <repo-root>
 pip install -e . && pip install pytest
 ```
 
@@ -24,13 +24,13 @@ None. The library uses a default HMAC key for testing. No external credentials r
 python -m pytest tests/ -v --tb=short
 ```
 
-Expected: 123 tests collected, all passing, ~1s runtime. If test count changes, check which files are in `tests/`.
+Expected: 144 tests collected, all passing, a few seconds runtime. If test count changes, check which files are in `tests/`.
 
 ## Test Suites
 
 | File | Tests | What It Covers |
 |------|-------|---------|
-| `tests/test_guard.py` | 12 | Core sanitize/restore/detect logic |
+| `tests/test_guard.py` | 33 | Core sanitize/restore/detect logic, key handling, token width, detection precision |
 | `tests/test_trace.py` | 31 | TraceRecorder, @trace decorator, JSONL/Markdown/Timeline export |
 | `tests/test_reidentification.py` | 22 | HMAC brute-force resistance, key sensitivity, collision rates, statistical indistinguishability |
 | `tests/test_accuracy.py` | 15 | 45-column benchmark, FNR/FPR metrics, confidence scores |
@@ -61,9 +61,9 @@ Create a DataFrame with only BLOCK-level columns (身份证号, 银行卡号). S
 
 ## Key Gotchas
 
-- **HMAC key is a module-level constant**: `guard._DEFAULT_HMAC_KEY` is set at import time from `VENUS_PII_KEY` env var. To test with different keys, patch the module constant directly (`guard._DEFAULT_HMAC_KEY = b"new-key"`), don't set `os.environ` after import — it won't take effect.
+- **Pass keys explicitly**: prefer `sanitize(df, key="test-key")`. The fallback chain is `key=` arg → `VENUS_PII_KEY` env var (read per call) → public default key, and using the public default emits a `UserWarning` — expect those warnings in tests that don't pass a key. Patching `guard._DEFAULT_HMAC_KEY` still works for legacy tests.
 - **Polars not Pandas**: This library uses Polars DataFrames, not Pandas. Use `pl.DataFrame()`, not `pd.DataFrame()`.
-- **No CI configured**: This repo has no GitHub Actions or other CI. Tests must be run locally.
-- **Token format**: Tokens are `PREFIX_` + 8 hex chars (e.g., `PERSON_a4f92e42`). The prefix reveals the PII category but nothing about the original value.
+- **CI**: `.github/workflows/test.yml` runs pytest on push/PR across Python 3.10–3.12. `publish.yml` releases to PyPI on `v*` tags.
+- **Token format**: Tokens are `PREFIX_` + hex chars of width `guard._DEFAULT_TOKEN_WIDTH` (default 16, e.g. `PERSON_a4f92e42f16f90d7`); width is configurable via `sanitize(df, token_width=...)`. Don't hard-code token lengths in assertions — reference the constant.
 - **BLOCK vs MASK**: BLOCK columns are completely removed from the sanitized DataFrame (not tokenized). MASK columns are tokenized and can be restored. Don't expect token maps for BLOCK columns.
-- **Salary banding**: Salaries are replaced with band labels (SALARY_BAND_A through SALARY_BAND_E), not tokenized. Banding is deterministic based on value ranges.
+- **Salary banding**: Salaries are replaced with band labels (SALARY_BAND_A through SALARY_BAND_E), not tokenized. Banding is deterministic; `restore()` maps a band back to its numeric range string (e.g. `[5000, 10000)`), not the exact value.
